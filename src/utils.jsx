@@ -157,6 +157,8 @@ const morphCloseMask = (mask, W, H, radius) => {
     return out;
   };
   const erodeAxis = (src, isHoriz) => {
+    // OOB neighbors are treated as foreground so the close pass doesn't
+    // hollow out a `radius`-wide band along the canvas edges.
     const out = new Uint8Array(src.length);
     if (isHoriz) {
       for (let y = 0; y < H; y++) {
@@ -165,7 +167,7 @@ const morphCloseMask = (mask, W, H, radius) => {
           let v = 1;
           for (let dx = -radius; dx <= radius; dx++) {
             const nx = x + dx;
-            if (nx < 0 || nx >= W || !src[row + nx]) { v = 0; break; }
+            if (nx >= 0 && nx < W && !src[row + nx]) { v = 0; break; }
           }
           out[row + x] = v;
         }
@@ -176,7 +178,7 @@ const morphCloseMask = (mask, W, H, radius) => {
           let v = 1;
           for (let dy = -radius; dy <= radius; dy++) {
             const ny = y + dy;
-            if (ny < 0 || ny >= H || !src[ny * W + x]) { v = 0; break; }
+            if (ny >= 0 && ny < H && !src[ny * W + x]) { v = 0; break; }
           }
           out[y * W + x] = v;
         }
@@ -312,7 +314,8 @@ const autoDetectSprites = (img, opts = {}) => {
   }
 
   // Post-process merge (overlap + containment + proximity), then apply padding.
-  boxes = mergeBoxes(boxes, { mergeDist });
+  // Setting mergeDist to 0 fully disables the merge step.
+  if (mergeDist > 0) boxes = mergeBoxes(boxes, { mergeDist });
   if (padding > 0) {
     boxes = boxes.map(b => ({
       x: Math.max(0, b.x - padding),

@@ -823,9 +823,9 @@ const ModePanel = ({ tool, modeOpts, setModeOpts, image, sprites, setSprites }) 
   if (tool === TOOLS.AUTO) {
     const detect = () => {
       const boxes = SpriteUtils.autoDetectSprites(image, {
-        tolerance: modeOpts.autoTolerance || 18,
-        minSize: modeOpts.autoMinSize || 12,
-        padding: modeOpts.autoPadding || 0,
+        tolerance: modeOpts.autoTolerance ?? 18,
+        minSize: modeOpts.autoMinSize ?? 12,
+        padding: modeOpts.autoPadding ?? 0,
         closePx: modeOpts.autoClose ?? 1,
         mergeDist: modeOpts.autoMerge ?? 6,
       });
@@ -875,7 +875,7 @@ const ModePanel = ({ tool, modeOpts, setModeOpts, image, sprites, setSprites }) 
               onChange={(e) => setModeOpts({ ...modeOpts, autoClose: Math.max(0, Math.min(5, +e.target.value || 0)) })}/>
           </div>
           <div className="field">
-            <label title="Merge boxes within this many pixels of each other (0 disables)">Merge</label>
+            <label title="Merge boxes within this many pixels of each other (0 disables all post-merge, including overlap/containment)">Merge</label>
             <input type="number" min="0" max="64" value={modeOpts.autoMerge ?? 6}
               onChange={(e) => setModeOpts({ ...modeOpts, autoMerge: Math.max(0, +e.target.value || 0) })}/>
           </div>
