@@ -699,6 +699,7 @@ const SpriteCanvas = ({
 
 // --- Mode-specific control panel that floats above the canvas
 const ModePanel = ({ tool, modeOpts, setModeOpts, image, sprites, setSprites }) => {
+  const [lastDetected, setLastDetected] = useState(null);
   if (tool === TOOLS.SELECT) {
     return (
       <div className="mode-panel">
@@ -823,8 +824,10 @@ const ModePanel = ({ tool, modeOpts, setModeOpts, image, sprites, setSprites }) 
     const detect = () => {
       const boxes = SpriteUtils.autoDetectSprites(image, {
         tolerance: modeOpts.autoTolerance || 18,
-        minSize: modeOpts.autoMinSize || 8,
-        padding: modeOpts.autoPadding || 1,
+        minSize: modeOpts.autoMinSize || 12,
+        padding: modeOpts.autoPadding || 0,
+        closePx: modeOpts.autoClose ?? 1,
+        mergeDist: modeOpts.autoMerge ?? 6,
       });
       // If uniform option is on, expand all boxes to the largest size
       let final = boxes;
@@ -845,6 +848,7 @@ const ModePanel = ({ tool, modeOpts, setModeOpts, image, sprites, setSprites }) 
         ...sprites,
         ...final.map((b, i) => ({ id: startId + i, name: '', box: b, customName: false })),
       ]);
+      setLastDetected(final.length);
     };
     return (
       <div className="mode-panel">
@@ -857,13 +861,23 @@ const ModePanel = ({ tool, modeOpts, setModeOpts, image, sprites, setSprites }) 
           </div>
           <div className="field">
             <label title="Min sprite size in px">Min</label>
-            <input type="number" min="1" value={modeOpts.autoMinSize ?? 8}
+            <input type="number" min="1" value={modeOpts.autoMinSize ?? 12}
               onChange={(e) => setModeOpts({ ...modeOpts, autoMinSize: Math.max(1, +e.target.value || 1) })}/>
           </div>
           <div className="field">
             <label title="Padding around detected box">Pad</label>
-            <input type="number" min="0" value={modeOpts.autoPadding ?? 1}
+            <input type="number" min="0" value={modeOpts.autoPadding ?? 0}
               onChange={(e) => setModeOpts({ ...modeOpts, autoPadding: Math.max(0, +e.target.value || 0) })}/>
+          </div>
+          <div className="field">
+            <label title="Morphological close radius (bridges anti-alias gaps before detection)">Close</label>
+            <input type="number" min="0" max="5" value={modeOpts.autoClose ?? 1}
+              onChange={(e) => setModeOpts({ ...modeOpts, autoClose: Math.max(0, Math.min(5, +e.target.value || 0)) })}/>
+          </div>
+          <div className="field">
+            <label title="Merge boxes within this many pixels of each other (0 disables)">Merge</label>
+            <input type="number" min="0" max="64" value={modeOpts.autoMerge ?? 6}
+              onChange={(e) => setModeOpts({ ...modeOpts, autoMerge: Math.max(0, +e.target.value || 0) })}/>
           </div>
           <div className="sep" />
           <label style={{ display:'flex', alignItems:'center', gap: 5, fontSize: 12, color:'var(--ink-2)', cursor:'pointer' }}>
@@ -876,6 +890,11 @@ const ModePanel = ({ tool, modeOpts, setModeOpts, image, sprites, setSprites }) 
             <Icons.Auto size={12} style={{ verticalAlign: '-2px', marginRight: 4 }} />
             Detect
           </button>
+          {lastDetected !== null && (
+            <span style={{ fontSize: 11, color: 'var(--ink-2)', marginLeft: 6 }}>
+              {lastDetected === 0 ? 'No sprites found' : `Detected ${lastDetected}`}
+            </span>
+          )}
         </div>
       </div>
     );
