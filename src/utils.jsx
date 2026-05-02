@@ -43,17 +43,39 @@ const colorDistSq = (r1, g1, b1, r2, g2, b2) =>
   (r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2;
 
 // Crop a region from img. Optionally apply background removal.
-// bgRemoval: { mode: 'color' | 'wand' | null, color: [r,g,b], tolerance: 0..255, seedX, seedY }
-const cropSprite = (img, box, bgRemoval) => {
+// bgRemoval: { mode: 'color' | 'wand' | 'ai' | null, color: [r,g,b], tolerance: 0..255, seedX, seedY, aiCache }
+// Async because the 'ai' branch (and only that branch) reads from a Map
+// that's populated by AI inference; today the function returns synchronously
+// for color/wand/null modes but the signature is async so callers don't need
+// to special-case modes.
+//
+// In 'ai' mode this fails closed: if the cache has no entry for the exact
+// box, returns null instead of silently rendering the un-masked source.
+// Callers (thumbnails, export) treat null as "skip" so the UI never claims
+// "BG removed (AI)" while shipping pixels with the original background.
+const cropSprite = async (img, box, bgRemoval) => {
   const { x, y, w, h } = box;
   if (w <= 0 || h <= 0) return null;
+
+  if (bgRemoval && bgRemoval.mode === 'ai') {
+    const key = window.AIBackgroundRemoval?.boxKey(box);
+    const cached = key ? bgRemoval.aiCache?.get(key) : null;
+    if (!cached) return null; // fail closed — no masked entry, no output
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(cached, 0, 0);
+    return c;
+  }
+
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   const ctx = c.getContext('2d');
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(img, x, y, w, h, 0, 0, w, h);
 
-  if (bgRemoval && bgRemoval.mode) {
+  if (bgRemoval && (bgRemoval.mode === 'color' || bgRemoval.mode === 'wand')) {
     const data = ctx.getImageData(0, 0, w, h);
     const px = data.data;
     if (bgRemoval.mode === 'color') {

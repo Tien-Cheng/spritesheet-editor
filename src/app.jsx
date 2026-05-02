@@ -12,7 +12,7 @@ const App = () => {
     autoClose: 1, autoMerge: 6,
   });
   const [bgRemoval, setBgRemoval] = React.useState({
-    mode: null, // null | 'color' | 'wand'
+    mode: null, // null | 'color' | 'wand' | 'ai'
     color: [255, 255, 255],
     tolerance: 16,
   });

@@ -12,11 +12,22 @@
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
+<!--
+  Transformers.js loader. The dynamic import() lives in a real module
+  script so the AI feature can be lazy-loaded (the function is only
+  invoked when the user clicks "AI Remove") without resorting to
+  `new Function('import')` shims that require CSP unsafe-eval.
+-->
+<script type="module">
+window.__loadTransformers = () =>
+  import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/+esm');
+</script>
 </head>
 <body>
 <div id="root"></div>
 <script type="text/babel" src="src/icons.jsx"></script>
 <script type="text/babel" src="src/utils.jsx"></script>
+<script type="text/babel" src="src/ai-bg.jsx"></script>
 <script type="text/babel" src="src/canvas.jsx"></script>
 <script type="text/babel" src="src/sidebar.jsx"></script>
 <script type="text/babel" src="src/toolbar.jsx"></script>
