@@ -11,6 +11,7 @@ const SpriteSidebar = ({
   const [exporting, setExporting] = React.useState(false);
   const [thumbs, setThumbs] = React.useState({});
   const [toast, setToast] = React.useState(null);
+  const [aiState, setAiState] = React.useState({ running: false, done: 0, total: 0 });
 
   // Show toast
   const showToast = (msg) => {
@@ -25,7 +26,7 @@ const SpriteSidebar = ({
     let active = true;
     (async () => {
       for (const s of sprites) {
-        const c = SpriteUtils.cropSprite(image, s.box, bgRemoval);
+        const c = await SpriteUtils.cropSprite(image, s.box, bgRemoval);
         if (!c || !active) continue;
         next[s.id] = c.toDataURL('image/png');
       }
@@ -64,6 +65,34 @@ const SpriteSidebar = ({
 
   const clearBg = () => setBgRemoval({ mode: null, color: [255,255,255], tolerance: 16 });
 
+  // True when AI mode is active but some sprite boxes have changed since
+  // inference (their boxKey is missing from the cache).
+  const aiStale = React.useMemo(() => {
+    if (bgRemoval.mode !== 'ai' || !bgRemoval.aiCache) return false;
+    return sprites.some(s => !bgRemoval.aiCache.has(window.AIBackgroundRemoval.boxKey(s.box)));
+  }, [sprites, bgRemoval]);
+
+  const onAiRemove = async () => {
+    if (!image || !sprites.length) return;
+    setAiState({ running: true, done: 0, total: sprites.length });
+    const firstRun = !window.__benSegmenterAttempted;
+    window.__benSegmenterAttempted = true;
+    if (firstRun) showToast('Loading model… (~80MB on first use)');
+    try {
+      const cache = await window.AIBackgroundRemoval.processSpritesAI(
+        image, sprites,
+        (d, t) => setAiState({ running: true, done: d, total: t }),
+      );
+      setBgRemoval({ ...bgRemoval, mode: 'ai', aiCache: cache });
+      showToast(`AI removed background on ${sprites.length} sprite${sprites.length === 1 ? '' : 's'}`);
+    } catch (err) {
+      console.error('[ai-bg] failed:', err);
+      showToast(`AI failed: ${err?.message || err}`);
+    } finally {
+      setAiState({ running: false, done: 0, total: 0 });
+    }
+  };
+
   // Export all sprites as zip
   const onExport = async () => {
     if (!image || !sprites.length) return;
@@ -73,7 +102,7 @@ const SpriteSidebar = ({
       const used = {};
       for (let i = 0; i < sprites.length; i++) {
         const s = sprites[i];
-        const c = SpriteUtils.cropSprite(image, s.box, bgRemoval);
+        const c = await SpriteUtils.cropSprite(image, s.box, bgRemoval);
         if (!c) continue;
         const blob = await SpriteUtils.canvasToBlob(c);
         let base = s.customName && s.name
@@ -188,13 +217,26 @@ const SpriteSidebar = ({
             {bgRemoval.mode === 'color' ? <Icons.Check size={12}/> : null}
             {bgRemoval.mode === 'color' ? ' Color BG on' : 'Color BG'}
           </button>
+          <button
+            className={bgRemoval.mode === 'ai' && !aiStale ? 'primary' : ''}
+            disabled={!image || !sprites.length || aiState.running}
+            onClick={onAiRemove}
+            title="Run BEN2 (AI) to remove background per sprite — works on noisy or photographic art">
+            {aiState.running
+              ? `AI… ${aiState.done}/${aiState.total}`
+              : (bgRemoval.mode === 'ai'
+                  ? (aiStale ? 'AI Remove · stale' : <><Icons.Check size={12}/> AI on</>)
+                  : 'AI Remove')}
+          </button>
           <button onClick={clearBg} disabled={!bgRemoval.mode}>
             <Icons.X size={11} style={{ verticalAlign:'-1px' }}/> Clear
           </button>
         </div>
         <div style={{ marginTop: 8, fontSize: 11, color: 'var(--ink-3)', lineHeight: 1.4 }}>
-          Use the <strong>eyedropper</strong> (I) to pick a color from the image, or the
-          <strong> magic wand</strong> (W) to flood-fill from a click. Removal is applied
+          Use the <strong>eyedropper</strong> (I) to pick a color from the image, the
+          <strong> magic wand</strong> (W) to flood-fill from a click, or
+          <strong> AI Remove</strong> for noisy / photographic sprites
+          (downloads ~80MB on first use, runs locally). Removal is applied
           on export &amp; in thumbnails — your source image is preserved.
         </div>
       </div>
@@ -296,7 +338,7 @@ const SpriteSidebar = ({
         </button>
         <div className="export-meta">
           {sprites.length
-            ? `${sprites.length} PNG${sprites.length===1?'':'s'}${bgRemoval.mode ? ' · BG removed' : ''}`
+            ? `${sprites.length} PNG${sprites.length===1?'':'s'}${bgRemoval.mode ? (bgRemoval.mode === 'ai' ? ' · BG removed (AI)' : ' · BG removed') : ''}`
             : 'Crop sprites to enable export'}
         </div>
       </div>
