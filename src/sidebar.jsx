@@ -75,15 +75,22 @@ const SpriteSidebar = ({
   const onAiRemove = async () => {
     if (!image || !sprites.length) return;
     setAiState({ running: true, done: 0, total: sprites.length });
-    const firstRun = !window.__benSegmenterAttempted;
-    window.__benSegmenterAttempted = true;
-    if (firstRun) showToast('Loading model… (~80MB on first use)');
+    // Show the loading toast only on the first use of the model (the bundle
+    // + ~80MB of weights are cached after a successful load). Querying
+    // isModelLoaded() *before* awaiting the segmenter avoids the race where
+    // the toast was previously suppressed even on a failed first attempt.
+    if (!window.AIBackgroundRemoval.isModelLoaded()) {
+      showToast('Loading model… (~80MB on first use)');
+    }
     try {
       const cache = await window.AIBackgroundRemoval.processSpritesAI(
         image, sprites,
         (d, t) => setAiState({ running: true, done: d, total: t }),
       );
-      setBgRemoval({ ...bgRemoval, mode: 'ai', aiCache: cache });
+      // Functional update so a concurrent change to bgRemoval (e.g. user
+      // tweaking the tolerance slider mid-run) isn't clobbered by a stale
+      // closure snapshot.
+      setBgRemoval(prev => ({ ...prev, mode: 'ai', aiCache: cache }));
       showToast(`AI removed background on ${sprites.length} sprite${sprites.length === 1 ? '' : 's'}`);
     } catch (err) {
       console.error('[ai-bg] failed:', err);
@@ -96,6 +103,13 @@ const SpriteSidebar = ({
   // Export all sprites as zip
   const onExport = async () => {
     if (!image || !sprites.length) return;
+    // In AI mode, refuse export when the cache is stale — silent skip-on-miss
+    // would otherwise yield a ZIP with fewer files than sprites (or, before
+    // cropSprite started failing closed, mixed masked/unmasked output).
+    if (bgRemoval.mode === 'ai' && aiStale) {
+      showToast('Sprite boxes changed since AI run — click "AI Remove" to refresh');
+      return;
+    }
     setExporting(true);
     try {
       const zip = new JSZip();
@@ -331,14 +345,16 @@ const SpriteSidebar = ({
 
       <div className="sidebar-footer">
         <button className="export-btn"
-          disabled={!sprites.length || exporting}
+          disabled={!sprites.length || exporting || (bgRemoval.mode === 'ai' && aiStale)}
           onClick={onExport}>
           <Icons.Download size={14} />
           {exporting ? 'Exporting…' : `Export ${sprites.length || ''} as ZIP`.trim()}
         </button>
         <div className="export-meta">
           {sprites.length
-            ? `${sprites.length} PNG${sprites.length===1?'':'s'}${bgRemoval.mode ? (bgRemoval.mode === 'ai' ? ' · BG removed (AI)' : ' · BG removed') : ''}`
+            ? (bgRemoval.mode === 'ai' && aiStale
+                ? `${sprites.length} PNG${sprites.length===1?'':'s'} · AI cache stale — re-run AI Remove`
+                : `${sprites.length} PNG${sprites.length===1?'':'s'}${bgRemoval.mode ? (bgRemoval.mode === 'ai' ? ' · BG removed (AI)' : ' · BG removed') : ''}`)
             : 'Crop sprites to enable export'}
         </div>
       </div>

@@ -1,36 +1,44 @@
 // AI background removal via Transformers.js + onnx-community/BEN2-ONNX.
-// Loaded lazily — Transformers.js is fetched from CDN only after the user
-// clicks "AI Remove".
-
-const TRANSFORMERS_CDN =
-  'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3/+esm';
-
-// `import()` hidden behind `new Function` so Babel-standalone doesn't try to
-// transform it (it would otherwise be rewritten into a require-style call).
-const esmImport = new Function('u', 'return import(u)');
+// Transformers.js itself is loaded lazily via window.__loadTransformers
+// (a `<script type="module">` shim in index.html that defers the
+// dynamic import until called).
 
 let segmenterPromise = null;
+let modelEverLoaded = false; // flips true the first time getSegmenter resolves
 
+// Tries WebGPU first, falls back to WASM. Cached so concurrent and
+// subsequent calls share the same load. On failure the cache is cleared
+// so the next click can retry from scratch (incl. re-fetching the bundle).
 const getSegmenter = () => {
   if (segmenterPromise) return segmenterPromise;
   segmenterPromise = (async () => {
-    const { pipeline } = await esmImport(TRANSFORMERS_CDN);
+    if (typeof window.__loadTransformers !== 'function') {
+      throw new Error('Transformers.js loader missing — check index.html');
+    }
+    const { pipeline, RawImage } = await window.__loadTransformers();
+    let seg;
     try {
-      return await pipeline(
+      seg = await pipeline(
         'background-removal',
         'onnx-community/BEN2-ONNX',
         { device: 'webgpu' }
       );
     } catch (e) {
       console.warn('[ai-bg] WebGPU unavailable, falling back to WASM:', e);
-      return pipeline('background-removal', 'onnx-community/BEN2-ONNX');
+      seg = await pipeline('background-removal', 'onnx-community/BEN2-ONNX');
     }
+    modelEverLoaded = true;
+    // Stash RawImage on the segmenter for removeBackground to reach.
+    seg.__RawImage = RawImage;
+    return seg;
   })().catch((err) => {
-    segmenterPromise = null; // allow retry after a load failure
+    segmenterPromise = null;
     throw err;
   });
   return segmenterPromise;
 };
+
+const isModelLoaded = () => modelEverLoaded;
 
 const boxKey = ({ x, y, w, h }) => `${x}_${y}_${w}_${h}`;
 
@@ -38,12 +46,13 @@ const boxKey = ({ x, y, w, h }) => `${x}_${y}_${w}_${h}`;
 // the background made transparent.
 const removeBackground = async (sourceCanvas) => {
   const segmenter = await getSegmenter();
-  const dataUrl = sourceCanvas.toDataURL('image/png');
-  const output = await segmenter(dataUrl);
+  // RawImage.fromCanvas avoids the round-trip through a base64 PNG.
+  const input = segmenter.__RawImage.fromCanvas(sourceCanvas);
+  const output = await segmenter(input);
   const raw = Array.isArray(output) ? output[0] : output;
   const out = raw.toCanvas();
-  // BEN2 returns a canvas at the original input size, but normalize to source
-  // dimensions just in case.
+  // BEN2 normally returns a canvas at the input size, but copy to a fresh
+  // canvas of the source's size to be defensive against resampling.
   if (out.width === sourceCanvas.width && out.height === sourceCanvas.height) {
     return out;
   }
@@ -77,6 +86,7 @@ const processSpritesAI = async (image, sprites, onProgress) => {
 
 window.AIBackgroundRemoval = {
   getSegmenter,
+  isModelLoaded,
   removeBackground,
   processSpritesAI,
   boxKey,
