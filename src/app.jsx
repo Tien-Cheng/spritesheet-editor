@@ -8,7 +8,8 @@ const App = () => {
   const [modeOpts, setModeOpts] = React.useState({
     fixedW: 64, fixedH: 64, locked: false,
     gridCols: 4, gridRows: 4, gridPadX: 0, gridPadY: 0,
-    autoTolerance: 18, autoMinSize: 8, autoPadding: 1, autoUniform: true,
+    autoTolerance: 18, autoMinSize: 12, autoPadding: 0, autoUniform: true,
+    autoClose: 1, autoMerge: 6,
   });
   const [bgRemoval, setBgRemoval] = React.useState({
     mode: null, // null | 'color' | 'wand'

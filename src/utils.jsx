@@ -99,63 +99,201 @@ const floodFillTransparent = (px, w, h, sx, sy, tolerance) => {
   }
 };
 
+// Sample background color from the 1px image border using a quantized histogram.
+// Returns null if >50% of border pixels are transparent (treat as transparent bg).
+const sampleBackgroundColor = (px, W, H) => {
+  const bins = new Map();
+  let transparentCount = 0;
+  let total = 0;
+  const sample = (x, y) => {
+    const i = (y * W + x) * 4;
+    total++;
+    if (px[i+3] < 8) { transparentCount++; return; }
+    // Quantize to 5 bits per channel (32 levels) → 15-bit key
+    const key = ((px[i] >> 3) << 10) | ((px[i+1] >> 3) << 5) | (px[i+2] >> 3);
+    const cur = bins.get(key);
+    if (cur) { cur.r += px[i]; cur.g += px[i+1]; cur.b += px[i+2]; cur.n++; }
+    else bins.set(key, { r: px[i], g: px[i+1], b: px[i+2], n: 1 });
+  };
+  for (let x = 0; x < W; x++) { sample(x, 0); sample(x, H - 1); }
+  for (let y = 1; y < H - 1; y++) { sample(0, y); sample(W - 1, y); }
+  if (transparentCount * 2 > total) return null;
+  let best = null;
+  for (const v of bins.values()) if (!best || v.n > best.n) best = v;
+  if (!best) return null;
+  return [Math.round(best.r / best.n), Math.round(best.g / best.n), Math.round(best.b / best.n)];
+};
+
+// Morphological close (dilate then erode) on a Uint8Array foreground mask.
+// Uses a square kernel of given radius. Separable per axis for speed.
+const morphCloseMask = (mask, W, H, radius) => {
+  if (radius <= 0) return mask;
+  const dilateAxis = (src, isHoriz) => {
+    const out = new Uint8Array(src.length);
+    if (isHoriz) {
+      for (let y = 0; y < H; y++) {
+        const row = y * W;
+        for (let x = 0; x < W; x++) {
+          let v = 0;
+          for (let dx = -radius; dx <= radius; dx++) {
+            const nx = x + dx;
+            if (nx >= 0 && nx < W && src[row + nx]) { v = 1; break; }
+          }
+          out[row + x] = v;
+        }
+      }
+    } else {
+      for (let x = 0; x < W; x++) {
+        for (let y = 0; y < H; y++) {
+          let v = 0;
+          for (let dy = -radius; dy <= radius; dy++) {
+            const ny = y + dy;
+            if (ny >= 0 && ny < H && src[ny * W + x]) { v = 1; break; }
+          }
+          out[y * W + x] = v;
+        }
+      }
+    }
+    return out;
+  };
+  const erodeAxis = (src, isHoriz) => {
+    // OOB neighbors are treated as foreground so the close pass doesn't
+    // hollow out a `radius`-wide band along the canvas edges.
+    const out = new Uint8Array(src.length);
+    if (isHoriz) {
+      for (let y = 0; y < H; y++) {
+        const row = y * W;
+        for (let x = 0; x < W; x++) {
+          let v = 1;
+          for (let dx = -radius; dx <= radius; dx++) {
+            const nx = x + dx;
+            if (nx >= 0 && nx < W && !src[row + nx]) { v = 0; break; }
+          }
+          out[row + x] = v;
+        }
+      }
+    } else {
+      for (let x = 0; x < W; x++) {
+        for (let y = 0; y < H; y++) {
+          let v = 1;
+          for (let dy = -radius; dy <= radius; dy++) {
+            const ny = y + dy;
+            if (ny >= 0 && ny < H && !src[ny * W + x]) { v = 0; break; }
+          }
+          out[y * W + x] = v;
+        }
+      }
+    }
+    return out;
+  };
+  return erodeAxis(erodeAxis(dilateAxis(dilateAxis(mask, true), false), true), false);
+};
+
+// Merge boxes that overlap (IoU), are contained in another, or are within mergeDist on both axes.
+// Iterates until no further merges occur.
+const mergeBoxes = (boxes, { iouThresh = 0.3, mergeDist = 6 } = {}) => {
+  if (boxes.length < 2) return boxes.slice();
+  let cur = boxes.slice();
+  for (let pass = 0; pass < 8; pass++) {
+    const n = cur.length;
+    const parent = new Array(n);
+    for (let i = 0; i < n; i++) parent[i] = i;
+    const find = (i) => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+    const link = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; };
+    let merged = false;
+    for (let i = 0; i < n; i++) {
+      const a = cur[i];
+      for (let j = i + 1; j < n; j++) {
+        if (find(i) === find(j)) continue;
+        const b = cur[j];
+        // Overlap in each axis (positive = overlap, negative = gap)
+        const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+        const oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+        const gapX = -ox, gapY = -oy;
+        let connect = false;
+        if (ox > 0 && oy > 0) {
+          const inter = ox * oy;
+          const unionArea = a.w * a.h + b.w * b.h - inter;
+          const iou = inter / unionArea;
+          if (iou >= iouThresh) connect = true;
+          // Containment: one box's area equals intersection
+          else if (inter === a.w * a.h || inter === b.w * b.h) connect = true;
+        } else if (gapX <= mergeDist && gapY <= mergeDist) {
+          connect = true;
+        }
+        if (connect) { link(i, j); merged = true; }
+      }
+    }
+    if (!merged) break;
+    // Collapse groups
+    const groups = new Map();
+    for (let i = 0; i < n; i++) {
+      const r = find(i);
+      const g = groups.get(r);
+      const a = cur[i];
+      if (!g) groups.set(r, { x: a.x, y: a.y, x2: a.x + a.w, y2: a.y + a.h });
+      else {
+        if (a.x < g.x) g.x = a.x;
+        if (a.y < g.y) g.y = a.y;
+        if (a.x + a.w > g.x2) g.x2 = a.x + a.w;
+        if (a.y + a.h > g.y2) g.y2 = a.y + a.h;
+      }
+    }
+    cur = [...groups.values()].map(g => ({ x: g.x, y: g.y, w: g.x2 - g.x, h: g.y2 - g.y }));
+  }
+  return cur;
+};
+
 // Auto-detect: find connected non-background regions in the image.
-// Returns array of {x,y,w,h} bounding boxes. bgColor is RGB or null (=use corner sample).
+// Returns array of {x,y,w,h} bounding boxes.
 const autoDetectSprites = (img, opts = {}) => {
   const data = getImageData(img);
   const { width: W, height: H, data: px } = data;
   const tolerance = opts.tolerance ?? 18;
-  const minSize = opts.minSize ?? 6;
+  const minSize = opts.minSize ?? 12;
   const padding = opts.padding ?? 0;
+  const closePx = opts.closePx ?? 1;
+  const mergeDist = opts.mergeDist ?? 6;
+  const maxAspect = opts.maxAspect ?? 6;
 
-  // Determine bg color: use opts.color if provided; else sample 4 corners and pick most common.
+  // Determine bg color: explicit override > border histogram > transparent.
   let bg = opts.color;
-  if (!bg) {
-    const corners = [
-      [0,0], [W-1,0], [0,H-1], [W-1,H-1]
-    ].map(([x,y]) => {
-      const i = (y*W + x) * 4;
-      return [px[i], px[i+1], px[i+2], px[i+3]];
-    });
-    // If corner is fully transparent, treat as bg.
-    const transparentCorner = corners.find(c => c[3] === 0);
-    if (transparentCorner) bg = null; // means: bg = transparent
-    else bg = corners[0]; // top-left
-  }
+  if (bg === undefined) bg = sampleBackgroundColor(px, W, H);
 
   const tol2 = tolerance * tolerance;
-  const isBg = (i) => {
+  const isBgPixel = (i) => {
     const a = px[i+3];
-    if (bg === null) return a < 8; // transparent bg
-    if (a < 8) return true; // also treat fully transparent as bg
+    if (bg === null) return a < 8;
+    if (a < 8) return true;
     return colorDistSq(px[i], px[i+1], px[i+2], bg[0], bg[1], bg[2]) <= tol2;
   };
 
-  // BFS over non-bg pixels with 8-connectivity, collect bounding boxes.
+  // Build foreground mask, then morphologically close it to bridge anti-alias gaps.
+  let mask = new Uint8Array(W * H);
+  for (let p = 0, i = 0; p < W * H; p++, i += 4) mask[p] = isBgPixel(i) ? 0 : 1;
+  mask = morphCloseMask(mask, W, H, closePx);
+
+  // BFS over the closed mask with 8-connectivity, collect bounding boxes.
   const visited = new Uint8Array(W * H);
-  const boxes = [];
+  let boxes = [];
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const p = y * W + x;
       if (visited[p]) continue;
-      const i = p * 4;
-      if (isBg(i)) { visited[p] = 1; continue; }
-      // BFS
+      if (!mask[p]) { visited[p] = 1; continue; }
       let minX = x, maxX = x, minY = y, maxY = y, count = 0;
       const stack = [p];
       while (stack.length) {
         const q = stack.pop();
         if (visited[q]) continue;
         visited[q] = 1;
-        const qi = q * 4;
-        if (isBg(qi)) continue;
+        if (!mask[q]) continue;
         const qx = q % W, qy = (q / W) | 0;
         if (qx < minX) minX = qx;
         if (qx > maxX) maxX = qx;
         if (qy < minY) minY = qy;
         if (qy > maxY) maxY = qy;
         count++;
-        // 8-connectivity
         for (let dy = -1; dy <= 1; dy++) {
           for (let dx = -1; dx <= 1; dx++) {
             if (!dx && !dy) continue;
@@ -168,16 +306,25 @@ const autoDetectSprites = (img, opts = {}) => {
       }
       const bw = maxX - minX + 1;
       const bh = maxY - minY + 1;
-      if (bw >= minSize && bh >= minSize && count > minSize * minSize / 2) {
-        boxes.push({
-          x: Math.max(0, minX - padding),
-          y: Math.max(0, minY - padding),
-          w: Math.min(W, bw + padding * 2),
-          h: Math.min(H, bh + padding * 2),
-        });
+      const aspect = Math.max(bw, bh) / Math.max(1, Math.min(bw, bh));
+      if (bw >= minSize && bh >= minSize && count > minSize * minSize / 2 && aspect <= maxAspect) {
+        boxes.push({ x: minX, y: minY, w: bw, h: bh });
       }
     }
   }
+
+  // Post-process merge (overlap + containment + proximity), then apply padding.
+  // Setting mergeDist to 0 fully disables the merge step.
+  if (mergeDist > 0) boxes = mergeBoxes(boxes, { mergeDist });
+  if (padding > 0) {
+    boxes = boxes.map(b => ({
+      x: Math.max(0, b.x - padding),
+      y: Math.max(0, b.y - padding),
+      w: Math.min(W - Math.max(0, b.x - padding), b.w + padding * 2),
+      h: Math.min(H - Math.max(0, b.y - padding), b.h + padding * 2),
+    }));
+  }
+
   // Sort top-to-bottom, left-to-right (by row bands)
   boxes.sort((a, b) => {
     const rowA = Math.floor(a.y / 20), rowB = Math.floor(b.y / 20);
@@ -229,5 +376,6 @@ window.SpriteUtils = {
   clamp, hexToRgb, rgbToHex,
   sampleImagePixel, getImageData,
   cropSprite, autoDetectSprites, gridBoxes,
+  sampleBackgroundColor, morphCloseMask, mergeBoxes,
   loadImageFile, canvasToBlob, safeName,
 };
