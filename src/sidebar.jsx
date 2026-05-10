@@ -63,7 +63,7 @@ const SpriteSidebar = ({
     showToast(`Normalized all sprites to ${w}×${h}`);
   };
 
-  const clearBg = () => setBgRemoval({ mode: null, color: [255,255,255], tolerance: 16 });
+  const clearBg = () => setBgRemoval({ mode: null, color: [255,255,255], tolerance: 16, edgeConnected: true });
 
   // True when AI mode is active but some sprite boxes have changed since
   // inference (their boxKey is missing from the cache).
@@ -222,6 +222,16 @@ const SpriteSidebar = ({
             value={bgRemoval.tolerance}
             onChange={(e) => setBgRemoval({ ...bgRemoval, tolerance: +e.target.value })}/>
           <span className="tolerance-readout">{bgRemoval.tolerance}</span>
+        </div>
+        <div className="bg-row">
+          <label htmlFor="bg-edge-connected">Edge-connected</label>
+          <input
+            id="bg-edge-connected"
+            type="checkbox"
+            checked={bgRemoval.edgeConnected !== false}
+            onChange={(e) => setBgRemoval({ ...bgRemoval, edgeConnected: e.target.checked })}
+            title="Only remove background pixels reachable from the image edge — preserves interior regions of the same color (e.g. a dark visor on a dark bg)."
+          />
         </div>
         <div className="bg-actions">
           <button

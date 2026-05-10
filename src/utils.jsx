@@ -81,9 +81,13 @@ const cropSprite = async (img, box, bgRemoval) => {
     if (bgRemoval.mode === 'color') {
       const [tr, tg, tb] = bgRemoval.color;
       const tol2 = (bgRemoval.tolerance || 0) ** 2;
-      for (let i = 0; i < px.length; i += 4) {
-        if (colorDistSq(px[i], px[i+1], px[i+2], tr, tg, tb) <= tol2) {
-          px[i+3] = 0;
+      if (bgRemoval.edgeConnected !== false) {
+        floodFillFromBorderTransparent(px, w, h, tr, tg, tb, tol2);
+      } else {
+        for (let i = 0; i < px.length; i += 4) {
+          if (colorDistSq(px[i], px[i+1], px[i+2], tr, tg, tb) <= tol2) {
+            px[i+3] = 0;
+          }
         }
       }
     } else if (bgRemoval.mode === 'wand') {
@@ -111,6 +115,39 @@ const floodFillTransparent = (px, w, h, sx, sy, tolerance) => {
     visited[p] = 1;
     const i = p * 4;
     if (px[i+3] === 0) continue; // already transparent
+    if (colorDistSq(px[i], px[i+1], px[i+2], tr, tg, tb) > tol2) continue;
+    px[i+3] = 0;
+    const px_x = p % w, px_y = (p / w) | 0;
+    if (px_x > 0) stack.push(p - 1);
+    if (px_x < w - 1) stack.push(p + 1);
+    if (px_y > 0) stack.push(p - w);
+    if (px_y < h - 1) stack.push(p + w);
+  }
+};
+
+// Multi-seed flood fill from every border pixel within tol2 of (tr,tg,tb).
+// Only erases bg-colored pixels reachable from the canvas edge — interior
+// regions of the same color are preserved (the global-match alternative
+// erases them too, even when the user only wants the surrounding bg gone).
+const floodFillFromBorderTransparent = (px, w, h, tr, tg, tb, tol2) => {
+  const visited = new Uint8Array(w * h);
+  const stack = [];
+  const seedIfMatches = (x, y) => {
+    const p = y * w + x;
+    if (visited[p]) return;
+    const i = p * 4;
+    if (px[i+3] === 0) { visited[p] = 1; return; }
+    if (colorDistSq(px[i], px[i+1], px[i+2], tr, tg, tb) > tol2) return;
+    stack.push(p);
+  };
+  for (let x = 0; x < w; x++) { seedIfMatches(x, 0); seedIfMatches(x, h - 1); }
+  for (let y = 0; y < h; y++) { seedIfMatches(0, y); seedIfMatches(w - 1, y); }
+  while (stack.length) {
+    const p = stack.pop();
+    if (visited[p]) continue;
+    visited[p] = 1;
+    const i = p * 4;
+    if (px[i+3] === 0) continue;
     if (colorDistSq(px[i], px[i+1], px[i+2], tr, tg, tb) > tol2) continue;
     px[i+3] = 0;
     const px_x = p % w, px_y = (p / w) | 0;
