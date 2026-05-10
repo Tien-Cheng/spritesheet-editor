@@ -15,6 +15,7 @@ const App = () => {
     mode: null, // null | 'color' | 'wand'
     color: [255, 255, 255],
     tolerance: 16,
+    edgeConnected: true,
   });
 
   // Load image (file -> Image)
